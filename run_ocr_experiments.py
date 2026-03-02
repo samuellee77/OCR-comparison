@@ -43,7 +43,7 @@ def setup_wandb(enabled: bool, project: str, run_name: str | None):
     return wandb
 
 
-def run_smoke_tests(word_features, word_labels, wandb=None):
+def run_smoke_tests(word_features, word_labels, models, wandb=None):
     """Run small sanity tests for each classifier on a tiny subset."""
     SMOKE_WINDOW_RADIUS = 1  # window size = 3
     SMOKE_TRAIN = 50
@@ -73,23 +73,23 @@ def run_smoke_tests(word_features, word_labels, wandb=None):
             }
         )
 
-    # Structural SVM
-    res_ssvm_smoke = run_structured_svm(
-        X_tr_s, y_tr_s, X_te_s, y_te_s, K=K, d_window=d_window_smoke
-    )
-    _record("struct_svm", res_ssvm_smoke)
+    if "struct_svm" in models:
+        res_ssvm_smoke = run_structured_svm(
+            X_tr_s, y_tr_s, X_te_s, y_te_s, K=K, d_window=d_window_smoke
+        )
+        _record("struct_svm", res_ssvm_smoke)
 
-    # CRF
-    res_crf_smoke = run_crf(X_tr_s, y_tr_s, X_te_s, y_te_s)
-    _record("crf", res_crf_smoke)
+    if "crf" in models:
+        res_crf_smoke = run_crf(X_tr_s, y_tr_s, X_te_s, y_te_s)
+        _record("crf", res_crf_smoke)
 
-    # Auto-context
-    res_auto_smoke = run_auto_context(X_tr_s, y_tr_s, X_te_s, y_te_s, K=K)
-    _record("auto_context", res_auto_smoke)
+    if "auto_context" in models:
+        res_auto_smoke = run_auto_context(X_tr_s, y_tr_s, X_te_s, y_te_s, K=K)
+        _record("auto_context", res_auto_smoke)
 
-    # Fixed-point
-    res_fp_smoke = run_fixed_point(X_tr_s, y_tr_s, X_te_s, y_te_s, K=K)
-    _record("fixed_point", res_fp_smoke)
+    if "fixed_point" in models:
+        res_fp_smoke = run_fixed_point(X_tr_s, y_tr_s, X_te_s, y_te_s, K=K)
+        _record("fixed_point", res_fp_smoke)
 
     smoke_df = pd.DataFrame(smoke_rows).sort_values("method")
     print("\nSmoke test summary:")
@@ -101,7 +101,7 @@ def run_smoke_tests(word_features, word_labels, wandb=None):
     return smoke_df
 
 
-def run_full_experiments(word_features, word_labels, wandb=None):
+def run_full_experiments(word_features, word_labels, models, wandb=None):
     """Run the full grid of experiments and return a DataFrame."""
     window_radii = [0, 1, 2]  # window sizes 1, 3, 5
     splits = [(1000, 4000), (2500, 2500), (4000, 1000)]
@@ -142,79 +142,79 @@ def run_full_experiments(word_features, word_labels, wandb=None):
                 X_win, word_labels, n_train, n_test, random_state=0
             )
 
-            # Structural SVM
-            res_ssvm = run_structured_svm(
-                X_tr, y_tr, X_te, y_te, K=K, d_window=d_window
-            )
-            row = {
-                "method": "struct_svm",
-                "window_radius": W,
-                "window_size": 2 * W + 1,
-                "n_train": n_train,
-                "n_test": n_test,
-                "train_word_error": 1.0 - res_ssvm["train_word_acc"],
-                "test_word_error": 1.0 - res_ssvm["test_word_acc"],
-                "train_char_error": 1.0 - res_ssvm["train_char_acc"],
-                "test_char_error": 1.0 - res_ssvm["test_char_acc"],
-                "train_time": res_ssvm["train_time"],
-                "test_time": res_ssvm["test_time"],
-            }
-            results.append(row)
-            maybe_wandb_log(row)
+            if "struct_svm" in models:
+                res_ssvm = run_structured_svm(
+                    X_tr, y_tr, X_te, y_te, K=K, d_window=d_window
+                )
+                row = {
+                    "method": "struct_svm",
+                    "window_radius": W,
+                    "window_size": 2 * W + 1,
+                    "n_train": n_train,
+                    "n_test": n_test,
+                    "train_word_error": 1.0 - res_ssvm["train_word_acc"],
+                    "test_word_error": 1.0 - res_ssvm["test_word_acc"],
+                    "train_char_error": 1.0 - res_ssvm["train_char_acc"],
+                    "test_char_error": 1.0 - res_ssvm["test_char_acc"],
+                    "train_time": res_ssvm["train_time"],
+                    "test_time": res_ssvm["test_time"],
+                }
+                results.append(row)
+                maybe_wandb_log(row)
 
-            # CRF
-            res_crf = run_crf(X_tr, y_tr, X_te, y_te)
-            row = {
-                "method": "crf",
-                "window_radius": W,
-                "window_size": 2 * W + 1,
-                "n_train": n_train,
-                "n_test": n_test,
-                "train_word_error": 1.0 - res_crf["train_word_acc"],
-                "test_word_error": 1.0 - res_crf["test_word_acc"],
-                "train_char_error": 1.0 - res_crf["train_char_acc"],
-                "test_char_error": 1.0 - res_crf["test_char_acc"],
-                "train_time": res_crf["train_time"],
-                "test_time": res_crf["test_time"],
-            }
-            results.append(row)
-            maybe_wandb_log(row)
+            if "crf" in models:
+                res_crf = run_crf(X_tr, y_tr, X_te, y_te)
+                row = {
+                    "method": "crf",
+                    "window_radius": W,
+                    "window_size": 2 * W + 1,
+                    "n_train": n_train,
+                    "n_test": n_test,
+                    "train_word_error": 1.0 - res_crf["train_word_acc"],
+                    "test_word_error": 1.0 - res_crf["test_word_acc"],
+                    "train_char_error": 1.0 - res_crf["train_char_acc"],
+                    "test_char_error": 1.0 - res_crf["test_char_acc"],
+                    "train_time": res_crf["train_time"],
+                    "test_time": res_crf["test_time"],
+                }
+                results.append(row)
+                maybe_wandb_log(row)
 
-            # Auto-context
-            res_auto = run_auto_context(X_tr, y_tr, X_te, y_te, K=K)
-            row = {
-                "method": "auto_context",
-                "window_radius": W,
-                "window_size": 2 * W + 1,
-                "n_train": n_train,
-                "n_test": n_test,
-                "train_word_error": 1.0 - res_auto["train_word_acc"],
-                "test_word_error": 1.0 - res_auto["test_word_acc"],
-                "train_char_error": 1.0 - res_auto["train_char_acc"],
-                "test_char_error": 1.0 - res_auto["test_char_acc"],
-                "train_time": res_auto["train_time"],
-                "test_time": res_auto["test_time"],
-            }
-            results.append(row)
-            maybe_wandb_log(row)
+            if "auto_context" in models:
+                res_auto = run_auto_context(X_tr, y_tr, X_te, y_te, K=K)
+                row = {
+                    "method": "auto_context",
+                    "window_radius": W,
+                    "window_size": 2 * W + 1,
+                    "n_train": n_train,
+                    "n_test": n_test,
+                    "train_word_error": 1.0 - res_auto["train_word_acc"],
+                    "test_word_error": 1.0 - res_auto["test_word_acc"],
+                    "train_char_error": 1.0 - res_auto["train_char_acc"],
+                    "test_char_error": 1.0 - res_auto["test_char_acc"],
+                    "train_time": res_auto["train_time"],
+                    "test_time": res_auto["test_time"],
+                }
+                results.append(row)
+                maybe_wandb_log(row)
 
-            # Fixed-point
-            res_fp = run_fixed_point(X_tr, y_tr, X_te, y_te, K=K)
-            row = {
-                "method": "fixed_point",
-                "window_radius": W,
-                "window_size": 2 * W + 1,
-                "n_train": n_train,
-                "n_test": n_test,
-                "train_word_error": 1.0 - res_fp["train_word_acc"],
-                "test_word_error": 1.0 - res_fp["test_word_acc"],
-                "train_char_error": 1.0 - res_fp["train_char_acc"],
-                "test_char_error": 1.0 - res_fp["test_char_acc"],
-                "train_time": res_fp["train_time"],
-                "test_time": res_fp["test_time"],
-            }
-            results.append(row)
-            maybe_wandb_log(row)
+            if "fixed_point" in models:
+                res_fp = run_fixed_point(X_tr, y_tr, X_te, y_te, K=K)
+                row = {
+                    "method": "fixed_point",
+                    "window_radius": W,
+                    "window_size": 2 * W + 1,
+                    "n_train": n_train,
+                    "n_test": n_test,
+                    "train_word_error": 1.0 - res_fp["train_word_acc"],
+                    "test_word_error": 1.0 - res_fp["test_word_acc"],
+                    "train_char_error": 1.0 - res_fp["train_char_acc"],
+                    "test_char_error": 1.0 - res_fp["test_char_acc"],
+                    "train_time": res_fp["train_time"],
+                    "test_time": res_fp["test_time"],
+                }
+                results.append(row)
+                maybe_wandb_log(row)
 
     results_df = pd.DataFrame(results).sort_values(
         ["method", "window_radius", "n_train"]
@@ -258,8 +258,25 @@ def main():
         action="store_true",
         help="Run only the small smoke tests (skip full experiments).",
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=["struct_svm", "crf", "auto_context", "fixed_point", "all"],
+        default=["struct_svm", "crf", "auto_context", "fixed_point"],
+        help=(
+            "Which models to run. Choose one or more of "
+            "'struct_svm', 'crf', 'auto_context', 'fixed_point', or 'all'. "
+            "Default: all models."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # Normalize model list
+    if "all" in args.models:
+        models = ["struct_svm", "crf", "auto_context", "fixed_point"]
+    else:
+        models = args.models
 
     # Initialize wandb (optional)
     wandb = setup_wandb(
@@ -290,11 +307,11 @@ def main():
 
     if args.smoke_only:
         # Smoke tests
-        smoke_df = run_smoke_tests(word_features, word_labels, wandb=wandb)
+        smoke_df = run_smoke_tests(word_features, word_labels, models=models, wandb=wandb)
         print("Smoke-only mode; skipping full experiments.")
     else:
         # Full experiments
-        results_df = run_full_experiments(word_features, word_labels, wandb=wandb)
+        results_df = run_full_experiments(word_features, word_labels, models=models, wandb=wandb)
 
 
 if __name__ == "__main__":
