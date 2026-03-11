@@ -71,8 +71,8 @@ def build_word_sequences(dataset: Dict, max_words: int = 5000, shuffle: bool = T
 
     word_ids = sorted(word_to_indices.keys())
     if shuffle:
-        rng = np.random.RandomState(random_state)
-        rng.shuffle(word_ids)
+        rng = np.random.default_rng(random_state)
+        word_ids = rng.permutation(word_ids).tolist()
 
     if max_words is not None:
         word_ids = word_ids[:max_words]
@@ -118,16 +118,21 @@ def make_sliding_window_features(word_features, window_radius: int):
     return out
 
 
-def train_test_split_sequences(X_seqs, y_seqs, n_train: int, n_test: int, random_state: int = 0):
+def train_test_split_sequences(
+    X_seqs,
+    y_seqs,
+    n_train: int,
+    n_test: int,
+    random_state: Optional[int] = None,
+):
     """Random train/test split on word-level sequences."""
     assert len(X_seqs) == len(y_seqs)
     total = len(X_seqs)
     if n_train + n_test > total:
         raise ValueError(f"Requested n_train+n_test={n_train+n_test} > total={total}")
 
-    rng = np.random.RandomState(random_state)
-    indices = np.arange(total)
-    rng.shuffle(indices)
+    rng = np.random.default_rng(random_state)
+    indices = rng.permutation(total)
     selected = indices[: n_train + n_test]
     tr_idx = selected[:n_train]
     te_idx = selected[n_train : n_train + n_test]
@@ -183,4 +188,3 @@ def flatten_sequences_for_classification(X_seqs, y_seqs):
         np.asarray(seq_ids, dtype=int),
         np.asarray(positions, dtype=int),
     )
-
