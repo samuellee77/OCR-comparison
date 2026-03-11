@@ -23,15 +23,4 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - --wandb-project
-  - ${wandb_project}
-  - --max-words
-  - ${max_words}
-  - --window-radii
-  - ${window_radii}
-  - --splits
-  - ${splits}
-  - --num-repeats
-  - ${num_repeats}
-  - --models
-  - ${model}
+  - ${args}

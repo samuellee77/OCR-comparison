@@ -448,7 +448,9 @@ def main():
     )
     parser.add_argument(
         "--wandb-project",
+        "--wandb_project",
         default="ocr-comparison",
+        dest="wandb_project",
         help="W&B project name (if enabled).",
     )
     parser.add_argument(
@@ -458,14 +460,18 @@ def main():
     )
     parser.add_argument(
         "--random-state",
+        "--random_state",
         type=int,
         default=None,
+        dest="random_state",
         help="Optional RNG seed for dataset shuffling and train/test splits. Default: None.",
     )
     parser.add_argument(
         "--max-words",
+        "--max_words",
         type=int,
         default=N_WORDS,
+        dest="max_words",
         help=f"Maximum number of words to load. Default: {N_WORDS}.",
     )
     parser.add_argument(
@@ -475,13 +481,17 @@ def main():
     )
     parser.add_argument(
         "--num-repeats",
+        "--num_repeats",
         type=int,
         default=3,
+        dest="num_repeats",
         help="Number of repeated runs per window/split setting. Default: 3.",
     )
     parser.add_argument(
         "--window-radii",
+        "--window_radii",
         default="0,1,2",
+        dest="window_radii",
         help="Comma-separated window radii for full experiments. Default: 0,1,2.",
     )
     parser.add_argument(
@@ -493,6 +503,11 @@ def main():
         "--smoke-only",
         action="store_true",
         help="Run only the small smoke tests (skip full experiments).",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["struct_svm", "crf", "auto_context", "fixed_point", "all"],
+        help="Single model alias for sweep agents.",
     )
     parser.add_argument(
         "--models",
@@ -508,7 +523,10 @@ def main():
 
     args = parser.parse_args()
 
-    models = normalize_models(args.models)
+    if args.model is not None:
+        models = normalize_models([args.model])
+    else:
+        models = normalize_models(args.models)
     window_radii = parse_window_radii(args.window_radii)
     splits = parse_splits(args.splits)
 
