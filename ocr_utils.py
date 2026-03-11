@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 
@@ -57,7 +57,7 @@ def read_OCR(filename: str, n_features: int) -> Dict:
     return dataset
 
 
-def build_word_sequences(dataset: Dict, max_words: int = 5000, shuffle: bool = True, random_state: int = 0):
+def build_word_sequences(dataset: Dict, max_words: int = 5000, shuffle: bool = True, random_state: Optional[int] = None):
     """Group flat OCR letters into word-level sequences.
 
     Returns
