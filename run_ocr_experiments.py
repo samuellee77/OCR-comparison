@@ -13,8 +13,6 @@ from ocr_utils import (
     make_sliding_window_features,
     train_test_split_sequences,
 )
-from structural_svm import run_structured_svm
-from crf_model import run_crf
 from auto_context import run_auto_context
 from fixed_point import run_fixed_point
 
@@ -58,30 +56,28 @@ def normalize_models(model_args: list[str]) -> list[str]:
 
 def build_wandb_config(
     max_words: int,
-    models: list[str],
-    smoke_only: bool,
+    model: str,
     random_state,
-    num_repeats: int,
-    window_radii: list[int],
-    splits: list[tuple[int, int]],
+    window_radius: int,
+    n_train: int,
+    n_test: int,
+    repeat_index: int,
 ):
     return {
         "n_words": max_words,
         "d": D,
         "k": K,
-        "models": models,
-        "smoke_only": smoke_only,
+        "model": model,
         "random_state": random_state,
-        "num_repeats": num_repeats,
-        "window_radii": window_radii,
-        "splits": [
-            {"n_train": n_train, "n_test": n_test} for n_train, n_test in splits
-        ],
+        "window_radius": window_radius,
+        "window_size": 2 * window_radius + 1,
+        "n_train": n_train,
+        "n_test": n_test,
+        "repeat_index": repeat_index,
     }
 
 
-def setup_wandb(enabled: bool, project: str, run_name: str | None, config: dict):
-    """Initialize Weights & Biases if requested and available."""
+def get_wandb_module(enabled: bool):
     if not enabled:
         return None
 
@@ -91,14 +87,20 @@ def setup_wandb(enabled: bool, project: str, run_name: str | None, config: dict)
         print("wandb not available; skipping logging. Install with: pip install wandb")
         return None
 
-    wandb.init(
+    return wandb
+
+
+def start_wandb_run(wandb, project: str, run_name: str | None, config: dict):
+    if wandb is None:
+        return None
+
+    run = wandb.init(
         project=project,
         name=run_name,
         config=config,
+        reinit="finish_previous",
     )
-    wandb.define_metric("experiment/index")
-    wandb.define_metric("experiment/*", step_metric="experiment/index")
-    return wandb
+    return run
 
 
 def add_metric_columns(row: dict) -> dict:
@@ -110,83 +112,52 @@ def add_metric_columns(row: dict) -> dict:
     return row
 
 
-def log_results_to_wandb(wandb, phase: str, results_df: pd.DataFrame):
-    if wandb is None or results_df.empty:
+def run_model(method: str, X_tr, y_tr, X_te, y_te, d_window: int) -> dict:
+    if method == "auto_context":
+        res = run_auto_context(X_tr, y_tr, X_te, y_te, K=K)
+    elif method == "fixed_point":
+        res = run_fixed_point(X_tr, y_tr, X_te, y_te, K=K)
+    else:
+        raise ValueError(f"Unsupported model: {method}")
+
+    return {
+        "method": method,
+        "train_word_error": 1.0 - res["train_word_acc"],
+        "test_word_error": 1.0 - res["test_word_acc"],
+        "train_char_error": 1.0 - res["train_char_acc"],
+        "test_char_error": 1.0 - res["test_char_acc"],
+        "train_time": res["train_time"],
+        "test_time": res["test_time"],
+    }
+
+
+def log_single_run_to_wandb(wandb, row: dict):
+    if wandb is None:
         return
 
-    table = wandb.Table(dataframe=results_df)
-    wandb.log({f"{phase}/results_table": table})
-
-    summary_df = (
-        results_df.groupby("method", as_index=False)
-        .agg(
-            runs=("method", "size"),
-            best_test_word_acc=("test_word_acc", "max"),
-            best_test_char_acc=("test_char_acc", "max"),
-            mean_test_word_acc=("test_word_acc", "mean"),
-            mean_test_char_acc=("test_char_acc", "mean"),
-            mean_train_time=("train_time", "mean"),
-            mean_test_time=("test_time", "mean"),
-        )
-        .sort_values("best_test_char_acc", ascending=False)
+    row_with_acc = add_metric_columns(row)
+    wandb.log(
+        {
+            "window_radius": row_with_acc["window_radius"],
+            "window_size": row_with_acc["window_size"],
+            "n_train": row_with_acc["n_train"],
+            "n_test": row_with_acc["n_test"],
+            "repeat_index": row_with_acc["repeat_index"],
+            "train_word_acc": row_with_acc["train_word_acc"],
+            "test_word_acc": row_with_acc["test_word_acc"],
+            "train_char_acc": row_with_acc["train_char_acc"],
+            "test_char_acc": row_with_acc["test_char_acc"],
+            "train_word_error": row_with_acc["train_word_error"],
+            "test_word_error": row_with_acc["test_word_error"],
+            "train_char_error": row_with_acc["train_char_error"],
+            "test_char_error": row_with_acc["test_char_error"],
+            "train_time": row_with_acc["train_time"],
+            "test_time": row_with_acc["test_time"],
+        }
     )
-    wandb.log({f"{phase}/summary_table": wandb.Table(dataframe=summary_df)})
-
-    by_window_df = (
-        results_df.groupby(["method", "window_radius", "window_size"], as_index=False)
-        .agg(
-            mean_train_word_error=("train_word_error", "mean"),
-            mean_test_word_error=("test_word_error", "mean"),
-            mean_train_char_error=("train_char_error", "mean"),
-            mean_test_char_error=("test_char_error", "mean"),
-            mean_train_time=("train_time", "mean"),
-            mean_test_time=("test_time", "mean"),
-        )
-        .sort_values(["method", "window_radius"])
-    )
-    wandb.log({f"{phase}/by_window_table": wandb.Table(dataframe=by_window_df)})
-
-    by_split_df = (
-        results_df.groupby(["method", "n_train", "n_test"], as_index=False)
-        .agg(
-            mean_train_word_error=("train_word_error", "mean"),
-            mean_test_word_error=("test_word_error", "mean"),
-            mean_train_char_error=("train_char_error", "mean"),
-            mean_test_char_error=("test_char_error", "mean"),
-            mean_train_time=("train_time", "mean"),
-            mean_test_time=("test_time", "mean"),
-        )
-        .sort_values(["method", "n_train", "n_test"])
-    )
-    wandb.log({f"{phase}/by_split_table": wandb.Table(dataframe=by_split_df)})
-
-    by_config_df = results_df.sort_values(["method", "window_radius", "n_train"])
-    wandb.log({f"{phase}/by_config_table": wandb.Table(dataframe=by_config_df)})
-
-    best_row = results_df.sort_values(
-        ["test_char_acc", "test_word_acc"], ascending=False
-    ).iloc[0]
-    wandb.summary[f"{phase}/best_method"] = best_row["method"]
-    wandb.summary[f"{phase}/best_test_char_acc"] = float(best_row["test_char_acc"])
-    wandb.summary[f"{phase}/best_test_word_acc"] = float(best_row["test_word_acc"])
-    wandb.summary[f"{phase}/best_window_radius"] = int(best_row["window_radius"])
-    wandb.summary[f"{phase}/best_n_train"] = int(best_row["n_train"])
-    wandb.summary[f"{phase}/best_n_test"] = int(best_row["n_test"])
-
-    for _, row in summary_df.iterrows():
-        method = row["method"]
-        wandb.summary[f"{phase}/{method}/best_test_char_acc"] = float(
-            row["best_test_char_acc"]
-        )
-        wandb.summary[f"{phase}/{method}/best_test_word_acc"] = float(
-            row["best_test_word_acc"]
-        )
-        wandb.summary[f"{phase}/{method}/mean_test_char_acc"] = float(
-            row["mean_test_char_acc"]
-        )
-        wandb.summary[f"{phase}/{method}/mean_test_word_acc"] = float(
-            row["mean_test_word_acc"]
-        )
+    for key, value in row_with_acc.items():
+        if key != "method":
+            wandb.summary[key] = value
 
 
 def run_smoke_tests(word_features, word_labels, models, random_state=None, wandb=None):
@@ -219,16 +190,6 @@ def run_smoke_tests(word_features, word_labels, models, random_state=None, wandb
             }
         )
 
-    if "struct_svm" in models:
-        res_ssvm_smoke = run_structured_svm(
-            X_tr_s, y_tr_s, X_te_s, y_te_s, K=K, d_window=d_window_smoke
-        )
-        _record("struct_svm", res_ssvm_smoke)
-
-    if "crf" in models:
-        res_crf_smoke = run_crf(X_tr_s, y_tr_s, X_te_s, y_te_s)
-        _record("crf", res_crf_smoke)
-
     if "auto_context" in models:
         res_auto_smoke = run_auto_context(X_tr_s, y_tr_s, X_te_s, y_te_s, K=K)
         _record("auto_context", res_auto_smoke)
@@ -242,8 +203,6 @@ def run_smoke_tests(word_features, word_labels, models, random_state=None, wandb
     print("\nSmoke test summary:")
     print(smoke_df.to_string(index=False))
 
-    log_results_to_wandb(wandb, phase="smoke", results_df=smoke_df)
-
     return smoke_df
 
 
@@ -256,6 +215,9 @@ def run_full_experiments(
     window_radii: list[int] | None = None,
     splits: list[tuple[int, int]] | None = None,
     wandb=None,
+    wandb_project: str | None = None,
+    wandb_run_name: str | None = None,
+    max_words: int = N_WORDS,
 ):
     """Run the full grid of experiments and return a DataFrame."""
     if window_radii is None:
@@ -264,34 +226,6 @@ def run_full_experiments(
         splits = [(1000, 4000), (2500, 2500), (4000, 1000)]
 
     results: list[dict] = []
-
-    def maybe_wandb_log(row: dict):
-        if wandb is None:
-            return
-
-        row_with_acc = add_metric_columns(row)
-        experiment_index = len(results) - 1
-        wandb.log(
-            {
-                "experiment/index": experiment_index,
-                "experiment/repeat_index": row_with_acc["repeat_index"],
-                "experiment/method": row_with_acc["method"],
-                "experiment/window_radius": row_with_acc["window_radius"],
-                "experiment/window_size": row_with_acc["window_size"],
-                "experiment/n_train": row_with_acc["n_train"],
-                "experiment/n_test": row_with_acc["n_test"],
-                "experiment/train_word_acc": row_with_acc["train_word_acc"],
-                "experiment/test_word_acc": row_with_acc["test_word_acc"],
-                "experiment/train_char_acc": row_with_acc["train_char_acc"],
-                "experiment/test_char_acc": row_with_acc["test_char_acc"],
-                "experiment/train_word_error": row_with_acc["train_word_error"],
-                "experiment/test_word_error": row_with_acc["test_word_error"],
-                "experiment/train_char_error": row_with_acc["train_char_error"],
-                "experiment/test_char_error": row_with_acc["test_char_error"],
-                "experiment/train_time": row_with_acc["train_time"],
-                "experiment/test_time": row_with_acc["test_time"],
-            }
-        )
 
     print("=== Full experiments ===")
     for W in window_radii:
@@ -310,83 +244,44 @@ def run_full_experiments(
                     random_state=random_state,
                 )
 
-                if "struct_svm" in models:
-                    res_ssvm = run_structured_svm(
-                        X_tr, y_tr, X_te, y_te, K=K, d_window=d_window
+                for method in models:
+                    row = run_model(method, X_tr, y_tr, X_te, y_te, d_window=d_window)
+                    row.update(
+                        {
+                            "repeat_index": repeat_index,
+                            "window_radius": W,
+                            "window_size": 2 * W + 1,
+                            "n_train": n_train,
+                            "n_test": n_test,
+                        }
                     )
-                    row = {
-                        "method": "struct_svm",
-                        "repeat_index": repeat_index,
-                        "window_radius": W,
-                        "window_size": 2 * W + 1,
-                        "n_train": n_train,
-                        "n_test": n_test,
-                        "train_word_error": 1.0 - res_ssvm["train_word_acc"],
-                        "test_word_error": 1.0 - res_ssvm["test_word_acc"],
-                        "train_char_error": 1.0 - res_ssvm["train_char_acc"],
-                        "test_char_error": 1.0 - res_ssvm["test_char_acc"],
-                        "train_time": res_ssvm["train_time"],
-                        "test_time": res_ssvm["test_time"],
-                    }
+                    if wandb is not None:
+                        suffix = (
+                            f"{method}-w{W}-tr{n_train}-te{n_test}-r{repeat_index + 1}"
+                        )
+                        run_name = (
+                            f"{wandb_run_name}-{suffix}"
+                            if wandb_run_name
+                            else suffix
+                        )
+                        run = start_wandb_run(
+                            wandb,
+                            project=wandb_project,
+                            run_name=run_name,
+                            config=build_wandb_config(
+                                max_words=max_words,
+                                model=method,
+                                random_state=random_state,
+                                window_radius=W,
+                                n_train=n_train,
+                                n_test=n_test,
+                                repeat_index=repeat_index,
+                            ),
+                        )
+                        log_single_run_to_wandb(wandb, row)
+                        if run is not None:
+                            run.finish()
                     results.append(row)
-                    maybe_wandb_log(row)
-
-                if "crf" in models:
-                    res_crf = run_crf(X_tr, y_tr, X_te, y_te)
-                    row = {
-                        "method": "crf",
-                        "repeat_index": repeat_index,
-                        "window_radius": W,
-                        "window_size": 2 * W + 1,
-                        "n_train": n_train,
-                        "n_test": n_test,
-                        "train_word_error": 1.0 - res_crf["train_word_acc"],
-                        "test_word_error": 1.0 - res_crf["test_word_acc"],
-                        "train_char_error": 1.0 - res_crf["train_char_acc"],
-                        "test_char_error": 1.0 - res_crf["test_char_acc"],
-                        "train_time": res_crf["train_time"],
-                        "test_time": res_crf["test_time"],
-                    }
-                    results.append(row)
-                    maybe_wandb_log(row)
-
-                if "auto_context" in models:
-                    res_auto = run_auto_context(X_tr, y_tr, X_te, y_te, K=K)
-                    row = {
-                        "method": "auto_context",
-                        "repeat_index": repeat_index,
-                        "window_radius": W,
-                        "window_size": 2 * W + 1,
-                        "n_train": n_train,
-                        "n_test": n_test,
-                        "train_word_error": 1.0 - res_auto["train_word_acc"],
-                        "test_word_error": 1.0 - res_auto["test_word_acc"],
-                        "train_char_error": 1.0 - res_auto["train_char_acc"],
-                        "test_char_error": 1.0 - res_auto["test_char_acc"],
-                        "train_time": res_auto["train_time"],
-                        "test_time": res_auto["test_time"],
-                    }
-                    results.append(row)
-                    maybe_wandb_log(row)
-
-                if "fixed_point" in models:
-                    res_fp = run_fixed_point(X_tr, y_tr, X_te, y_te, K=K)
-                    row = {
-                        "method": "fixed_point",
-                        "repeat_index": repeat_index,
-                        "window_radius": W,
-                        "window_size": 2 * W + 1,
-                        "n_train": n_train,
-                        "n_test": n_test,
-                        "train_word_error": 1.0 - res_fp["train_word_acc"],
-                        "test_word_error": 1.0 - res_fp["test_word_acc"],
-                        "train_char_error": 1.0 - res_fp["train_char_acc"],
-                        "test_char_error": 1.0 - res_fp["test_char_acc"],
-                        "train_time": res_fp["train_time"],
-                        "test_time": res_fp["test_time"],
-                    }
-                    results.append(row)
-                    maybe_wandb_log(row)
 
     results_df = pd.DataFrame(results).sort_values(
         ["method", "window_radius", "n_train", "repeat_index"]
@@ -426,8 +321,6 @@ def run_full_experiments(
     print(by_window_df.to_string(index=False))
     print("\nMean results by train/test split:")
     print(by_split_df.to_string(index=False))
-
-    log_results_to_wandb(wandb, phase="full", results_df=results_df)
 
     return results_df
 
@@ -506,17 +399,17 @@ def main():
     )
     parser.add_argument(
         "--model",
-        choices=["struct_svm", "crf", "auto_context", "fixed_point", "all"],
+        choices=["auto_context", "fixed_point", "all"],
         help="Single model alias for sweep agents.",
     )
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["struct_svm", "crf", "auto_context", "fixed_point", "all"],
-        default=["struct_svm", "crf", "auto_context", "fixed_point"],
+        choices=["auto_context", "fixed_point", "all"],
+        default=["auto_context", "fixed_point"],
         help=(
             "Which models to run. Choose one or more of "
-            "'struct_svm', 'crf', 'auto_context', 'fixed_point', or 'all'. "
+            "'auto_context', 'fixed_point', or 'all'. "
             "Default: all models."
         ),
     )
@@ -530,21 +423,7 @@ def main():
     window_radii = parse_window_radii(args.window_radii)
     splits = parse_splits(args.splits)
 
-    # Initialize wandb (optional)
-    wandb = setup_wandb(
-        enabled=not args.no_wandb,
-        project=args.wandb_project,
-        run_name=args.wandb_run_name,
-        config=build_wandb_config(
-            max_words=args.max_words,
-            models=models,
-            smoke_only=args.smoke_only,
-            random_state=args.random_state,
-            num_repeats=args.num_repeats,
-            window_radii=window_radii,
-            splits=splits,
-        ),
-    )
+    wandb = get_wandb_module(enabled=not args.no_wandb)
 
     # Load dataset
     print("Loading dataset from", args.data_path)
@@ -593,6 +472,9 @@ def main():
             window_radii=window_radii,
             splits=splits,
             wandb=wandb,
+            wandb_project=args.wandb_project,
+            wandb_run_name=args.wandb_run_name,
+            max_words=args.max_words,
         )
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -623,10 +505,6 @@ def main():
             .sort_values(["method", "n_train", "n_test"])
             .to_csv(output_dir / "full_results_by_split.csv", index=False)
         )
-
-    if wandb is not None:
-        wandb.finish()
-
 
 if __name__ == "__main__":
     main()
